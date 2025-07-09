@@ -1,10 +1,5 @@
 # Complete Backend Course with Express.js
 
-## Table of Contents
-
-1. [What it is](#what-it-is)
-2. [How to run](#how-to-run)
-
 ## What it is
 
 - Backend crash course with Mongodb, Node.js, Express.js
@@ -15,12 +10,23 @@
 ## How to run
 
 ```bash
-git clone https://github.com/bidursapkota00/Git.git
+git clone https://github.com/bidursapkota00/MEN-Stack-API-Development.git
+cd MEN-Stack-API-Development
 npm install
 npm run dev
 ```
 
 # MERN Stack CRUD Task App - Complete Guide
+
+## Table of Contents
+
+1. [Project Overview](#project-overview)
+2. [Project Setup](#project-setup)
+3. [Add Database](#add-database)
+4. [Create Task Collection Schema](#create-task-collection-schema)
+5. [Create Task Controller and Routes](#create-task-controller-and-routes)
+6. [Add error handler and 404 handler](#add-error-handler-and-404-handler)
+7. [Testing with Jest](#testing-with-jest)
 
 ## Project Overview
 
@@ -154,7 +160,9 @@ export default app;
   PORT=8080
 ```
 
-### 2.2 Database Configuration (`src/config/database.ts`)
+## Add Database
+
+### Database Configuration (`src/config/database.ts`)
 
 ```ts
 import mongoose from "mongoose";
@@ -181,13 +189,13 @@ export const disconnectDB = async (): Promise<void> => {
 };
 ```
 
-### 2.3 Add environment variables (`.env`)
+### Add environment variables (`.env`)
 
 ```bash
   MONGODB_URI=mongodb+srv://username:password@cluster1.dsaf.mongodb.net/task?retryWrites=true&w=majority&
 ```
 
-### 2.4 Update app.ts (`src/app.ts`)
+### Update app.ts (`src/app.ts`)
 
 ```ts
 import { connectDB } from "./config/database";
@@ -207,6 +215,8 @@ const startServer = async () => {
 
 startServer();
 ```
+
+## Create Task Collection Schema
 
 ### Task Model (`src/models/Task.ts`)
 
@@ -262,6 +272,8 @@ const TaskSchema = new Schema<ITask>(
 
 export const Task = mongoose.model<ITask>("Task", TaskSchema);
 ```
+
+## Create Task Controller and Routes
 
 ### Task Controller (`src/controllers/taskController.ts`)
 
@@ -340,6 +352,8 @@ import taskRoutes from "./routes/taskRoutes";
 app.use("/api/tasks", taskRoutes);
 ```
 
+## Add error handler and 404 handler
+
 ### Update app.ts : Error handler and not found handler (`src/app.ts`)
 
 ```ts
@@ -372,21 +386,157 @@ app.use((req, res) => {
 });
 ```
 
-## Backend Testing with Jest
+## Testing with Jest
 
-### Jest Configuration (`src/package.json`)
+### Jest Configuration
+
+```bash
+npm install -D jest @types/jest ts-jest supertest @types/supertest
+npm install mongodb-memory-server
+npm init jest@latest
+```
+
+### Update jest.config.ts
+
+```ts
+import type { Config } from "jest";
+
+const config: Config = {
+  // ...
+  // ...
+  preset: "ts-jest",
+  testEnvironment: "node",
+  roots: ["<rootDir>/src"],
+  testMatch: [
+    "<rootDir>/src/tests/**/*.test.ts",
+    "<rootDir>/src/**/__tests__/**/*.ts",
+  ],
+  collectCoverageFrom: [
+    "src/**/*.ts",
+    "!src/**/*.d.ts",
+    "!src/tests/**/*",
+    "!src/**/__tests__/**/*",
+  ],
+  setupFilesAfterEnv: ["<rootDir>/src/tests/setup.ts"],
+};
+```
+
+### Update package.json
 
 ```json
-{
-  "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js",
-    "test": "jest",
-    "test:watch": "jest --watch"
-  },
-  "jest": {
-    "testEnvironment": "node",
-    "setupFilesAfterEnv": ["<rootDir>/tests/setup.js"]
-  }
+"test": "jest",
+```
+
+### Update app.ts
+
+```ts
+if (process.env.NODE_ENV !== "test") {
+  startServer();
 }
+```
+
+### Create src/tests/setup.ts
+
+```ts
+import { MongoMemoryServer } from "mongodb-memory-server";
+import mongoose from "mongoose";
+
+let mongoServer: MongoMemoryServer;
+
+beforeAll(async () => {
+  mongoServer = await MongoMemoryServer.create();
+  const mongoUri = mongoServer.getUri();
+  await mongoose.connect(mongoUri);
+});
+
+afterAll(async () => {
+  await mongoose.disconnect();
+  await mongoServer.stop();
+});
+
+afterEach(async () => {
+  const collections = mongoose.connection.collections;
+  for (const key in collections) {
+    const collection = collections[key];
+    await collection.deleteMany({});
+  }
+});
+```
+
+### Tests to create and read tasks
+
+### Create src/tests/tasks.test.ts
+
+```ts
+import request from "supertest";
+import app from "../app";
+import { Task } from "../models/Task";
+
+describe("Tasks API", () => {
+  // some setup if necessary
+  describe("POST /api/tasks", () => {
+    it("should create a new task", async () => {
+      const taskData = {
+        title: "Test Task",
+        description: "Test Description",
+        priority: "high",
+      };
+
+      const response = await request(app)
+        .post("/api/tasks")
+        .send(taskData)
+        .expect(201);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.title).toBe(taskData.title);
+      expect(response.body.data.description).toBe(taskData.description);
+      expect(response.body.data.priority).toBe(taskData.priority);
+      expect(response.body.data.completed).toBe(false);
+    });
+  });
+
+  describe("GET /api/tasks", () => {
+    beforeEach(async () => {
+      await Task.create([
+        {
+          title: "Task 1",
+          completed: false,
+          priority: "low",
+        },
+        {
+          title: "Task 2",
+          completed: true,
+          priority: "high",
+        },
+        {
+          title: "Task 3",
+          completed: false,
+          priority: "medium",
+        },
+      ]);
+    });
+
+    it("should get all tasks", async () => {
+      const response = await request(app).get("/api/tasks").expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.tasks).toHaveLength(3);
+    });
+  });
+});
+```
+
+## Run Test
+
+```bash
+npm run test
+```
+
+## Bonus
+
+### Create .gitignore
+
+```bash
+coverage/
+.env
 ```
