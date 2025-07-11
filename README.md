@@ -27,6 +27,8 @@ npm run dev
 5. [Create Task Controller and Routes](#create-task-controller-and-routes)
 6. [Add error handler and 404 handler](#add-error-handler-and-404-handler)
 7. [Testing with Jest](#testing-with-jest)
+8. [Add Data Validation](#add-data-validation)
+9. [Add API Documentation](#add-api-documentation)
 
 ## Project Overview
 
@@ -539,4 +541,174 @@ npm run test
 ```bash
 coverage/
 .env
+```
+
+## Add Data Validation
+
+### Install dependencies
+
+```bash
+# Install Zod for validation
+npm install zod
+```
+
+### Add Schema or data transfer object (dto) defination (`src/schemas/taskSchemas.ts`)
+
+```ts
+import { z } from "zod";
+
+export const createTaskSchema = z.object({
+  title: z
+    .string()
+    .min(1, "Title is required")
+    .max(100, "Title must be less than 100 characters"),
+  description: z.string().optional(),
+  completed: z.boolean().default(false),
+  priority: z.enum(["low", "medium", "high"]).default("medium"),
+  dueDate: z.iso.datetime().optional(),
+});
+
+export type CreateTaskInput = z.infer<typeof createTaskSchema>;
+```
+
+### Create validation middleware (`src/middleware/validation.ts`)
+
+```ts
+import { Request, Response, NextFunction, RequestHandler } from "express";
+import { ZodType, ZodError } from "zod";
+
+export const validateBody = (schema: ZodType): RequestHandler => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      req.body = schema.parse(req.body);
+      next();
+    } catch (error) {
+      if (error instanceof ZodError) {
+        res.status(400).json({
+          success: false,
+          message: "Validation error",
+          errors: error.issues.map((issue) => ({
+            field: issue.path.join("."),
+            message: issue.message,
+          })),
+        });
+        return;
+      }
+      next(error);
+    }
+  };
+};
+```
+
+### Update Routes (`src/routes/taskRoutes.ts`)
+
+```ts
+import { validateBody } from "../middleware/validation";
+import { createTaskSchema } from "../schemas/taskSchemas";
+// ....
+// ....
+router.post("/", validateBody(createTaskSchema), createTask);
+```
+
+## Add API Documentation
+
+### Install dependencies
+
+```bash
+# Install swagger dependencies
+npm install -D swagger-jsdoc swagger-ui-express @types/swagger-jsdoc @types/swagger-ui-express
+```
+
+### Add Swagger configuration (`src/app.ts`)
+
+```ts
+import swaggerJsdoc from "swagger-jsdoc";
+import swaggerUi from "swagger-ui-express";
+
+// ....
+const PORT = process.env.PORT || 3000;
+
+// Add this
+const swaggerOptions = {
+  definition: {
+    openapi: "3.0.0",
+    info: {
+      title: "Tasks CRUD API",
+      version: "1.0.0",
+      description:
+        "A simple Tasks CRUD API with Express, TypeScript, and MongoDB",
+    },
+  },
+  apis: ["./src/routes/*.ts"],
+};
+
+const swaggerUiOptions = {
+  customSiteTitle: "Tasks API Docs",
+};
+
+const swaggerSpec = swaggerJsdoc(swaggerOptions);
+// ....
+// ....
+
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Add API Documentation Route
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, swaggerUiOptions)
+);
+```
+
+### Setup Swagger for Routes (`GET /api/tasks`)
+
+```yml
+/**
+ * @swagger
+ * /api/tasks:
+ *   get:
+ *     summary: Get all tasks
+ *     tags: [Tasks]
+ *     responses:
+ *       200:
+ *         description: List of tasks
+ */
+```
+
+### Setup Swagger for Routes (`POST /api/tasks`)
+
+```yml
+/**
+ * @swagger
+ * /api/tasks:
+ *   post:
+ *     summary: Create a new task
+ *     tags: [Tasks]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - title
+ *             properties:
+ *               title:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               completed:
+ *                 type: boolean
+ *               priority:
+ *                 type: string
+ *                 enum: [low, medium, high]
+ *               dueDate:
+ *                 type: string
+ *                 format: date-time
+ *     responses:
+ *       201:
+ *         description: Task created successfully
+ */
 ```
