@@ -31,6 +31,8 @@ npm run dev
 9. [Add API Documentation](#add-api-documentation)
 10. [Add register and login](#add-register-and-login)
 11. [Protect Route](#protect-route)
+12. [Add Test for login and register routes](#add-test-for-login-and-register-routes)
+13. [Tests for Route protection and Data Validation](#tests-for-route-protection-and-data-validation)
 
 ## Project Overview
 
@@ -1155,4 +1157,194 @@ import { authenticate } from "../middleware/auth";
  */
 router.post("/", authenticate, validateBody(createTaskSchema), createTask);
 // Add authenticate in route handler
+```
+
+## Add Test for login and register routes
+
+### Create (`src/tests/auth.test.ts`)
+
+```ts
+import request from "supertest";
+import app from "../app";
+import { User } from "../models/User";
+
+describe("Auth API", () => {
+  describe("POST /api/auth/register", () => {
+    it("should register a new user", async () => {
+      const userData = {
+        name: "John Doe",
+        email: "john@example.com",
+        password: "password123",
+      };
+
+      const response = await request(app)
+        .post("/api/auth/register")
+        .send(userData)
+        .expect(201);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.token).toBeDefined();
+      expect(response.body.data.user.email).toBe(userData.email);
+    });
+
+    it("should not register user with duplicate email", async () => {
+      const userData = {
+        name: "John Doe",
+        email: "john@example.com",
+        password: "password123",
+      };
+
+      await User.create(userData);
+
+      const response = await request(app)
+        .post("/api/auth/register")
+        .send(userData)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+    });
+  });
+
+  describe("POST /api/auth/login", () => {
+    beforeEach(async () => {
+      const user = new User({
+        name: "John Doe",
+        email: "john@example.com",
+        password: "password123",
+      });
+      await user.save();
+    });
+
+    it("should login with valid credentials", async () => {
+      const response = await request(app)
+        .post("/api/auth/login")
+        .send({
+          email: "john@example.com",
+          password: "password123",
+        })
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.token).toBeDefined();
+    });
+
+    it("should not login with invalid credentials", async () => {
+      const response = await request(app)
+        .post("/api/auth/login")
+        .send({
+          email: "john@example.com",
+          password: "wrongpassword",
+        })
+        .expect(401);
+
+      expect(response.body.success).toBe(false);
+    });
+  });
+});
+```
+
+## Tests for Route protection and Data Validation
+
+### Add function to create test user in test setup
+
+### Update src/tests/setup.ts
+
+```ts
+import { User } from "../models/User";
+import { generateToken } from "../utils/jwt";
+// ...
+// ...
+export const createTestUser = async () => {
+  const user = new User({
+    name: "Test User",
+    email: "test@example.com",
+    password: "password123",
+  });
+  await user.save();
+
+  const token = generateToken(user._id.toString());
+  return { user, token };
+};
+
+export const createTestUser2 = async () => {
+  const user = new User({
+    name: "Test User 2",
+    email: "test2@example.com",
+    password: "password123",
+  });
+  await user.save();
+
+  const token = generateToken(user._id.toString());
+  return { user, token };
+};
+```
+
+### Create user before running task tests
+
+### Update src/tests/tasks.test.ts
+
+```ts
+import { createTestUser, createTestUser2 } from "./setup";
+// ...
+
+describe("Tasks API", () => {
+  let authToken1: string;
+  let authToken2: string;
+  let user1Id: string;
+  let user2Id: string;
+
+  beforeEach(async () => {
+    const { token: token1, user: u1 } = await createTestUser();
+    const { token: token2, user: u2 } = await createTestUser2();
+
+    authToken1 = token1;
+    authToken2 = token2;
+    user1Id = u1._id.toString();
+    user2Id = u2._id.toString();
+  });
+
+  describe("POST /api/tasks", () => {
+    it("should create a new task", async () => {
+      const taskData = {
+        title: "Test Task",
+        description: "Test Description",
+        priority: "high",
+      };
+
+      const response = await request(app)
+        .post("/api/tasks")
+        .set("Authorization", `Bearer ${authToken1}`)
+        .send(taskData)
+        .expect(201);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.title).toBe(taskData.title);
+      expect(response.body.data.description).toBe(taskData.description);
+      expect(response.body.data.priority).toBe(taskData.priority);
+      expect(response.body.data.completed).toBe(false);
+    });
+
+    it("should return 401 without authentication", async () => {
+      const response = await request(app)
+        .post("/api/tasks")
+        .send({ title: "Test Task" })
+        .expect(401);
+
+      expect(response.body.success).toBe(false);
+    });
+
+    it("should return validation error for invalid data", async () => {
+      const response = await request(app)
+        .post("/api/tasks")
+        .set("Authorization", `Bearer ${authToken1}`)
+        .send({})
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Validation error");
+    });
+  });
+  // ...
+  // ...
+});
 ```
