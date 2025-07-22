@@ -29,6 +29,8 @@ npm run dev
 7. [Testing with Jest](#testing-with-jest)
 8. [Add Data Validation](#add-data-validation)
 9. [Add API Documentation](#add-api-documentation)
+10. [Add register and login](#add-register-and-login)
+11. [Protect Route](#protect-route)
 
 ## Project Overview
 
@@ -195,6 +197,8 @@ export const disconnectDB = async (): Promise<void> => {
 
 ```bash
   MONGODB_URI=mongodb+srv://username:password@cluster1.dsaf.mongodb.net/task?retryWrites=true&w=majority&
+  # For giving custom database name. default is test
+  #  mongodb.net/db_name?.....
 ```
 
 ### Update app.ts (`src/app.ts`)
@@ -629,6 +633,7 @@ import swaggerUi from "swagger-ui-express";
 const PORT = process.env.PORT || 3000;
 
 // Add this
+// Swagger configuration
 const swaggerOptions = {
   definition: {
     openapi: "3.0.0",
@@ -638,6 +643,12 @@ const swaggerOptions = {
       description:
         "A simple Tasks CRUD API with Express, TypeScript, and MongoDB",
     },
+    servers: [
+      {
+        url: `http://localhost:${PORT}`,
+        description: "Development server",
+      },
+    ],
   },
   apis: ["./src/routes/*.ts"],
 };
@@ -660,6 +671,47 @@ app.use(
   swaggerUi.serve,
   swaggerUi.setup(swaggerSpec, swaggerUiOptions)
 );
+```
+
+### Setup Swagger Schema for Task (`src/routes/taskRoutes.ts`)
+
+```yml
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Task:
+ *       type: object
+ *       required:
+ *         - title
+ *       properties:
+ *         _id:
+ *           type: string
+ *           description: The auto-generated id of the task
+ *         title:
+ *           type: string
+ *           description: The task title
+ *         description:
+ *           type: string
+ *           description: The task description
+ *         completed:
+ *           type: boolean
+ *           description: Task completion status
+ *         priority:
+ *           type: string
+ *           enum: [low, medium, high]
+ *           description: Task priority
+ *         dueDate:
+ *           type: string
+ *           format: date-time
+ *           description: Task due date
+ *         createdAt:
+ *           type: string
+ *           format: date-time
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ */
 ```
 
 ### Setup Swagger for Routes (`GET /api/tasks`)
@@ -711,4 +763,396 @@ app.use(
  *       201:
  *         description: Task created successfully
  */
+```
+
+## Add register and login
+
+### Install dependencies
+
+```bash
+npm install bcryptjs jsonwebtoken
+npm install -D @types/bcryptjs @types/jsonwebtoken
+```
+
+### Create utility for generating and verifying access token (`src/utils/jwt.ts`)
+
+```bash
+import jwt from "jsonwebtoken";
+
+const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
+const JWT_EXPIRES_IN = parseInt(process.env.JWT_EXPIRES_IN || "604800"); // 7 days in seconds
+
+export const generateToken = (userId: string): string => {
+  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+};
+
+export const verifyToken = (token: string) => {
+  return jwt.verify(token, JWT_SECRET);
+};
+```
+
+### Create User model (`src/models/User.ts`)
+
+```ts
+import mongoose, { Document, Schema, Types } from "mongoose";
+import bcrypt from "bcryptjs";
+
+export interface IUser extends Document {
+  _id: Types.ObjectId;
+  email: string;
+  password: string;
+  name: string;
+  createdAt: Date;
+  updatedAt: Date;
+  comparePassword(password: string): Promise<boolean>;
+}
+
+const UserSchema = new Schema<IUser>(
+  {
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
+    password: {
+      type: String,
+      required: true,
+      minlength: 6,
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+// Hash password before saving
+UserSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) return next();
+
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+  next();
+});
+
+// Add Document method to compare password
+UserSchema.methods.comparePassword = async function (
+  password: string
+): Promise<boolean> {
+  return bcrypt.compare(password, this.password);
+};
+
+export const User = mongoose.model<IUser>("User", UserSchema);
+```
+
+### Add controllers to login and register (`src/controllers/authController.ts`)
+
+```ts
+import { Request, Response } from "express";
+import { User } from "../models/User";
+import { generateToken } from "../utils/jwt";
+
+export const register = async (req: Request, res: Response) => {
+  try {
+    const { name, email, password }: any = req.body;
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      res.status(400).json({
+        success: false,
+        message: "User already exists with this email",
+      });
+      return;
+    }
+
+    const user = new User({ name, email, password });
+    await user.save();
+
+    const token = generateToken(user._id.toString());
+
+    res.status(201).json({
+      success: true,
+      message: "User registered successfully",
+      data: {
+        token,
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error registering user",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+export const login = async (req: Request, res: Response) => {
+  try {
+    const { email, password }: any = req.body;
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+      });
+      return;
+    }
+
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      res.status(401).json({
+        success: false,
+        message: "Invalid email or password",
+      });
+      return;
+    }
+
+    const token = generateToken(user._id.toString());
+
+    res.json({
+      success: true,
+      message: "Login successful",
+      data: {
+        token,
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error logging in",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+```
+
+### Add routes for login and register
+
+### In (`src/routes/authRoutes.ts`)
+
+```ts
+import { Router } from "express";
+import { register, login } from "../controllers/authController";
+
+const router = Router();
+
+router.post("/register", register);
+router.post("/login", login);
+
+export default router;
+```
+
+### In (`src/app.ts`)
+
+```ts
+import authRoutes from "./routes/authRoutes";
+// ....
+app.use("/api/auth", authRoutes);
+app.use("/api/tasks", taskRoutes);
+// ....
+```
+
+### Add docs for login and register
+
+### Common setup for user schema and auth response
+
+```ts
+const router = Router();
+// ...
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     User:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: string
+ *         name:
+ *           type: string
+ *         email:
+ *           type: string
+ *     AuthResponse:
+ *       type: object
+ *       properties:
+ *         success:
+ *           type: boolean
+ *         message:
+ *           type: string
+ *         data:
+ *           type: object
+ *           properties:
+ *             token:
+ *               type: string
+ *             user:
+ *               $ref: '#/components/schemas/User'
+ *   securitySchemes:
+ *     bearerAuth:
+ *       type: http
+ *       scheme: bearer
+ *       bearerFormat: JWT
+ */
+```
+
+### For Register
+
+```ts
+/**
+ * @swagger
+ * /api/auth/register:
+ *   post:
+ *     summary: Register a new user
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - email
+ *               - password
+ *             properties:
+ *               name:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *                 minLength: 6
+ *     responses:
+ *       201:
+ *         description: User registered successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuthResponse'
+ */
+
+router.post("/register", validateBody(registerSchema), register);
+// ....
+```
+
+### For Login
+
+```ts
+/**
+ * @swagger
+ * /api/auth/login:
+ *   post:
+ *     summary: Login user
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuthResponse'
+ */
+```
+
+## Protect Route
+
+### Create authentication middleware (`src/middleware/auth.ts`)
+
+```ts
+import { Request, Response, NextFunction } from "express";
+import { verifyToken } from "../utils/jwt";
+import { User } from "../models/User";
+
+interface AuthenticatedRequest extends Request {
+  user?: any;
+}
+
+export const authenticate = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const token = req.header("Authorization")?.replace("Bearer ", "");
+
+    if (!token) {
+      res.status(401).json({
+        success: false,
+        message: "Access denied. No token provided.",
+      });
+      return;
+    }
+
+    const decoded = verifyToken(token) as { userId: string };
+    const user = await User.findById(decoded.userId).select("-password");
+
+    if (!user) {
+      res.status(401).json({
+        success: false,
+        message: "Invalid token. User not found.",
+      });
+      return;
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    res.status(401).json({
+      success: false,
+      message: "Invalid token.",
+    });
+  }
+};
+```
+
+### Add auth middleware to Routes (`src/routes/taskRoutes.ts`)
+
+```ts
+import { authenticate } from "../middleware/auth";
+// ....
+// ....
+// Add security in swagger
+/**
+ * @swagger
+ * /api/tasks:
+ *   post:
+ *     summary: Create a new task
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ */
+router.post("/", authenticate, validateBody(createTaskSchema), createTask);
+// Add authenticate in route handler
 ```
