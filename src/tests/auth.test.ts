@@ -37,6 +37,21 @@ describe("Auth API", () => {
 
       expect(response.body.success).toBe(false);
     });
+
+    it("should return validation error for invalid data", async () => {
+      const badUserData = {
+        name: "J",
+        email: "john",
+        password: "pass",
+      };
+      const response = await request(app)
+        .post("/api/auth/register")
+        .send(badUserData)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Validation error");
+    });
   });
 
   describe("POST /api/auth/login", () => {
@@ -72,6 +87,20 @@ describe("Auth API", () => {
         .expect(401);
 
       expect(response.body.success).toBe(false);
+    });
+
+    it("should return validation error for invalid data", async () => {
+      const badUserData = {
+        email: "john",
+        password: "",
+      };
+      const response = await request(app)
+        .post("/api/auth/login")
+        .send(badUserData)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Validation error");
     });
   });
 });

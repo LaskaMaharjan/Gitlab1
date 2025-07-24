@@ -16,6 +16,16 @@ npm install
 npm run dev
 ```
 
+## Required environment variables (`.env`)
+
+```bash
+NODE_ENV=development
+PORT=8080
+MONGODB_URI=mongodb+srv://your-mongo-atlas-database-url
+JWT_SECRET=your-super-secret-jwt-key-here
+JWT_EXPIRES_IN=604800
+```
+
 # MERN Stack CRUD Task App - Complete Guide
 
 ## Table of Contents
@@ -30,9 +40,15 @@ npm run dev
 8. [Add Data Validation](#add-data-validation)
 9. [Add API Documentation](#add-api-documentation)
 10. [Add register and login](#add-register-and-login)
-11. [Protect Route](#protect-route)
-12. [Add Test for login and register routes](#add-test-for-login-and-register-routes)
-13. [Tests for Route protection and Data Validation](#tests-for-route-protection-and-data-validation)
+11. [Add Validation for login and registration](#add-validation-for-login-and-registration)
+12. [Protect Route](#protect-route)
+13. [Add Test for login and register routes](#add-test-for-login-and-register-routes)
+14. [Tests for Route protection and Data Validation](#tests-for-route-protection-and-data-validation)
+15. [Add User - Task Relationship](#add-user---task-relationship)
+16. [Adding Update Task Feature](#adding-update-task-feature)
+17. [Adding Delete Task Feature](#adding-delete-task-feature)
+18. [Adding Get Task By Id](#adding-get-task-by-id)
+19. [Adding Filter and Pagination in get all Tasks](#adding-filter-and-pagination-in-get-all-tasks)
 
 ## Project Overview
 
@@ -68,17 +84,15 @@ task-app/
 │  │   └── taskSchemas.ts
 │  │   └── authSchemas.ts
 │  ├── tests/    # Skip at beginning
-│  │   ├── controllers/
-│  │   │   └── taskController.test.ts
-│  │   ├── models/
-│  │   │   └── Task.test.ts
-│  │   └── routes/
-│  │       └── taskRoutes.test.ts
+│  │   └── task.test.ts
+│  │   └── setup.ts
+│  │   └── auth.test.ts
 │  └── app.ts
-├── .env.json
-├── .gitignore.json
+├── .env
+├── .gitignore
 ├── package-lock.json
 ├── package.json
+├── jest.config.js
 └── tsconfig.json
 
 ```
@@ -616,6 +630,14 @@ import { createTaskSchema } from "../schemas/taskSchemas";
 router.post("/", validateBody(createTaskSchema), createTask);
 ```
 
+### Update Controller (`src/controllers/taskController.ts`)
+
+```ts
+import { CreateTaskInput } from "../schemas/taskSchemas";
+// In createTask
+const taskData: CreateTaskInput = req.body;
+```
+
 ## Add API Documentation
 
 ### Install dependencies
@@ -1087,6 +1109,54 @@ router.post("/register", validateBody(registerSchema), register);
  */
 ```
 
+## Add Validation for login and registration
+
+### Create (`src/schemas/authSchemas.ts`)
+
+```ts
+import { z } from "zod";
+
+export const registerSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters"),
+  email: z.email("Invalid email format"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+});
+
+export const loginSchema = z.object({
+  email: z.email("Invalid email format"),
+  password: z.string().min(1, "Password is required"),
+});
+
+export type RegisterInput = z.infer<typeof registerSchema>;
+export type LoginInput = z.infer<typeof loginSchema>;
+```
+
+### Update (`src/routes/authRoutes.ts`)
+
+```ts
+// ...
+import { validateBody } from "../middleware/validation";
+import { registerSchema, loginSchema } from "../schemas/authSchemas";
+// ....
+// ....
+// add validateBody
+router.post("/register", validateBody(registerSchema), register);
+router.post("/login", validateBody(loginSchema), login);
+```
+
+### Update (`src/routes/authController.ts`)
+
+```ts
+// ...
+import { RegisterInput, LoginInput } from "../schemas/authSchemas";
+// ....
+// ....
+// In register
+const { name, email, password }: RegisterInput = req.body;
+// In login
+const { email, password }: LoginInput = req.body;
+```
+
 ## Protect Route
 
 ### Create authentication middleware (`src/middleware/auth.ts`)
@@ -1203,6 +1273,21 @@ describe("Auth API", () => {
 
       expect(response.body.success).toBe(false);
     });
+
+    it("should return validation error for invalid data", async () => {
+      const badUserData = {
+        name: "J",
+        email: "john",
+        password: "pass",
+      };
+      const response = await request(app)
+        .post("/api/auth/register")
+        .send(badUserData)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Validation error");
+    });
   });
 
   describe("POST /api/auth/login", () => {
@@ -1238,6 +1323,20 @@ describe("Auth API", () => {
         .expect(401);
 
       expect(response.body.success).toBe(false);
+    });
+
+    it("should return validation error for invalid data", async () => {
+      const badUserData = {
+        email: "john",
+        password: "",
+      };
+      const response = await request(app)
+        .post("/api/auth/login")
+        .send(badUserData)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Validation error");
     });
   });
 });
@@ -1346,5 +1445,834 @@ describe("Tasks API", () => {
   });
   // ...
   // ...
+});
+```
+
+## Add User - Task Relationship
+
+### Update (`src/models/Task.ts`)
+
+```ts
+// ...
+export interface ITask extends Document {
+  // ...
+  createdBy: mongoose.Types.ObjectId;
+  // ...
+}
+
+const TaskSchema = new Schema<ITask>(
+  {
+    // ...
+    // ...
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+```
+
+### Update (`src/controllers/taskController.ts`)
+
+```ts
+// Add createdBy
+// ....
+const task = new Task({
+  ...taskData,
+  createdBy: (req as any).user._id,
+  dueDate: taskData.dueDate ? new Date(taskData.dueDate) : undefined,
+});
+// ....
+```
+
+### Update (`src/tests/tasks.test.ts`)
+
+```ts
+it("should create a new task", async () => {
+  // ....
+  // ....
+  // ....
+  expect(response.body.data.createdBy.toString()).toBe(user1Id);
+});
+// ....
+// ....
+// ....
+// Add createdBy
+describe("GET /api/tasks", () => {
+  beforeEach(async () => {
+    await Task.create([
+      {
+        title: "Task 1",
+        completed: false,
+        priority: "low",
+        createdBy: user1Id,
+      },
+      {
+        title: "Task 2",
+        completed: true,
+        priority: "high",
+        createdBy: user1Id,
+      },
+      {
+        title: "Task 3",
+        completed: false,
+        priority: "medium",
+        createdBy: user2Id,
+      },
+    ]);
+  });
+});
+```
+
+## Adding Update Task Feature
+
+### Update (`src/schemas/taskSchemas.ts`)
+
+```ts
+// ...
+export const updateTaskSchema = z.object({
+  title: z.string().min(1).max(100).optional(),
+  description: z.string().optional(),
+  completed: z.boolean().optional(),
+  priority: z.enum(["low", "medium", "high"]).optional(),
+  dueDate: z.string().datetime().optional(),
+});
+
+export const taskParamsSchema = z.object({
+  id: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid task ID format"),
+});
+
+// ...
+
+export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
+export type TaskParams = z.infer<typeof taskParamsSchema>;
+```
+
+### Update (`src/middleware/validation.ts`)
+
+```ts
+import { TaskParams } from "../schemas/taskSchemas";
+// ...
+export const validateParams = (schema: ZodSchema): RequestHandler => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      req.params = schema.parse(req.params) as TaskParams;
+      next();
+    } catch (error) {
+      if (error instanceof ZodError) {
+        res.status(400).json({
+          success: false,
+          message: "Invalid parameters",
+          errors: error.errors.map((err) => ({
+            field: err.path.join("."),
+            message: err.message,
+          })),
+        });
+        return;
+      }
+      next(error);
+    }
+  };
+};
+```
+
+### Update (`src/controllers/taskController.ts`)
+
+```ts
+import { CreateTaskInput, UpdateTaskInput } from "../schemas/taskSchemas";
+// ...
+export const updateTask = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const updateData: UpdateTaskInput = req.body;
+
+    const task = await Task.findOneAndUpdate(
+      { _id: req.params.id, createdBy: (req as any).user._id },
+      {
+        ...updateData,
+        dueDate: updateData.dueDate ? new Date(updateData.dueDate) : undefined,
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!task) {
+      res.status(404).json({
+        success: false,
+        message: "Task not found or you do not have permission to update it",
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: "Task updated successfully",
+      data: task,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating task",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+```
+
+### Update (`src/routes/taskRoutes.ts`)
+
+```ts
+import {
+  getTasks,
+  createTask,
+  updateTask,
+} from "../controllers/taskController";
+import { validateBody, validateParams } from "../middleware/validation";
+import {
+  createTaskSchema,
+  updateTaskSchema,
+  taskParamsSchema,
+} from "../schemas/taskSchemas";
+
+/**
+ * @swagger
+ * /api/tasks/{id}:
+ *   put:
+ *     summary: Update a task
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Task ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               completed:
+ *                 type: boolean
+ *               priority:
+ *                 type: string
+ *                 enum: [low, medium, high]
+ *               dueDate:
+ *                 type: string
+ *                 format: date-time
+ *     responses:
+ *       200:
+ *         description: Task updated successfully
+ *       404:
+ *         description: Task not found
+ */
+router.put(
+  "/:id",
+  authenticate,
+  validateParams(taskParamsSchema),
+  validateBody(updateTaskSchema),
+  updateTask
+);
+```
+
+### Update (`src/tests/tasks.test.ts`)
+
+```ts
+describe("Tasks API", () => {
+  // ....
+  // ....
+  // ....
+  describe("PUT /api/tasks/:id", () => {
+    let user1TaskId: string;
+    let user2TaskId: string;
+
+    beforeEach(async () => {
+      const task1 = await Task.create({
+        title: "User1 Task",
+        createdBy: user1Id,
+      });
+      const task2 = await Task.create({
+        title: "User2 Task",
+        createdBy: user2Id,
+      });
+
+      user1TaskId = task1._id.toString();
+      user2TaskId = task2._id.toString();
+    });
+
+    it("should update own task", async () => {
+      const updateData = { title: "Updated User1 Task" };
+
+      const response = await request(app)
+        .put(`/api/tasks/${user1TaskId}`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .send(updateData)
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.title).toBe(updateData.title);
+    });
+
+    it("should not update other user's task", async () => {
+      const updateData = { title: "Trying to update" };
+
+      const response = await request(app)
+        .put(`/api/tasks/${user2TaskId}`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .send(updateData)
+        .expect(404);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe(
+        "Task not found or you do not have permission to update it"
+      );
+    });
+
+    it("should return 401 without authentication", async () => {
+      const response = await request(app)
+        .put(`/api/tasks/${user1TaskId}`)
+        .send({ title: "Updated" })
+        .expect(401);
+
+      expect(response.body.success).toBe(false);
+    });
+
+    it("should return 404 for non-existent task", async () => {
+      const fakeId = "507f1f77bcf86cd799439011";
+      const response = await request(app)
+        .put(`/api/tasks/${fakeId}`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .send({ title: "Updated" })
+        .expect(404);
+
+      expect(response.body.success).toBe(false);
+    });
+
+    it("should return validation error for invalid data", async () => {
+      const response = await request(app)
+        .put(`/api/tasks/${user1TaskId}`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .send({ title: "" })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Validation error");
+    });
+
+    it("should return validation error for invalid params", async () => {
+      const response = await request(app)
+        .put(`/api/tasks/invalid-id`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .send({ title: "Updated title" })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Invalid parameters");
+    });
+  });
+});
+```
+
+## Adding Delete Task Feature
+
+### Update (`src/controllers/taskController.ts`)
+
+```ts
+export const deleteTask = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const task = await Task.findOneAndDelete({
+      _id: req.params.id,
+      createdBy: (req as any).user._id,
+    });
+
+    console.log((req as any).user._id);
+    console.log(task);
+
+    if (!task) {
+      res.status(404).json({
+        success: false,
+        message: "Task not found or you do not have permission to delete it",
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      message: "Task deleted successfully",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error deleting task",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+```
+
+### Update (`src/routes/taskRoutes.ts`)
+
+```ts
+import {
+  getTasks,
+  createTask,
+  updateTask,
+  deleteTask,
+} from "../controllers/taskController";
+
+/**
+ * @swagger
+ * /api/tasks/{id}:
+ *   delete:
+ *     summary: Delete a task
+ *     tags: [Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Task ID
+ *     responses:
+ *       200:
+ *         description: Task deleted successfully
+ *       404:
+ *         description: Task not found
+ */
+router.delete(
+  "/:id",
+  authenticate,
+  validateParams(taskParamsSchema),
+  deleteTask
+);
+```
+
+### Update (`src/tests/tasks.test.ts`)
+
+```ts
+describe("Tasks API", () => {
+  // ....
+  // ....
+  // ....
+  describe("DELETE /api/tasks/:id", () => {
+    let user1TaskId: string;
+    let user2TaskId: string;
+
+    beforeEach(async () => {
+      const task1 = await Task.create({
+        title: "User1 Task",
+        createdBy: user1Id,
+      });
+      const task2 = await Task.create({
+        title: "User2 Task",
+        createdBy: user2Id,
+      });
+
+      user1TaskId = task1._id.toString();
+      user2TaskId = task2._id.toString();
+    });
+
+    it("should delete own task", async () => {
+      const response = await request(app)
+        .delete(`/api/tasks/${user2TaskId}`)
+        .set("Authorization", `Bearer ${authToken2}`)
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.message).toBe("Task deleted successfully");
+
+      const deletedTask = await Task.findById(user2TaskId);
+      expect(deletedTask).toBeNull();
+    });
+
+    it("should not delete other user's task", async () => {
+      const response = await request(app)
+        .delete(`/api/tasks/${user1TaskId}`)
+        .set("Authorization", `Bearer ${authToken2}`)
+        .expect(404);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe(
+        "Task not found or you do not have permission to delete it"
+      );
+
+      const task = await Task.findById(user2TaskId);
+      expect(task).not.toBeNull();
+    });
+
+    it("should return 401 without authentication", async () => {
+      const response = await request(app)
+        .delete(`/api/tasks/${user1TaskId}`)
+        .expect(401);
+
+      expect(response.body.success).toBe(false);
+    });
+
+    it("should return 404 for non-existent task", async () => {
+      const fakeId = "507f1f77bcf86cd799439011";
+      const response = await request(app)
+        .delete(`/api/tasks/${fakeId}`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .expect(404);
+
+      expect(response.body.success).toBe(false);
+    });
+
+    it("should return validation error for invalid params", async () => {
+      const response = await request(app)
+        .delete(`/api/tasks/invalid-id`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Invalid parameters");
+    });
+  });
+});
+```
+
+## Adding Get Task By Id
+
+### Update (`src/controllers/taskController.ts`)
+
+```ts
+export const getTaskById = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const task = await Task.findById(req.params.id);
+
+    if (!task) {
+      res.status(404).json({
+        success: false,
+        message: "Task not found",
+      });
+      return; // Important: return after sending response
+    }
+
+    res.json({
+      success: true,
+      data: task,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error fetching task",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+```
+
+### Update (`src/routes/taskRoutes.ts`)
+
+```ts
+import {
+  getTasks,
+  createTask,
+  updateTask,
+  deleteTask,
+  getTaskById,
+} from "../controllers/taskController";
+
+/**
+ * @swagger
+ * /api/tasks/{id}:
+ *   get:
+ *     summary: Get task by ID
+ *     tags: [Tasks]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Task ID
+ *     responses:
+ *       200:
+ *         description: Task details
+ *       404:
+ *         description: Task not found
+ */
+router.get("/:id", validateParams(taskParamsSchema), getTaskById);
+```
+
+### Update (`src/tests/tasks.test.ts`)
+
+```ts
+describe("Tasks API", () => {
+  // ....
+  // ....
+  // ....
+  describe("GET /api/tasks/:id", () => {
+    let taskId: string;
+
+    beforeEach(async () => {
+      const task = await Task.create({
+        title: "Test Task",
+        description: "Test Description",
+        createdBy: user2Id,
+      });
+      taskId = task._id.toString();
+    });
+
+    it("should get task by ID", async () => {
+      const response = await request(app)
+        .get(`/api/tasks/${taskId}`)
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.title).toBe("Test Task");
+    });
+
+    it("should return 404 for non-existent task", async () => {
+      const fakeId = "507f1f77bcf86cd799439011";
+      const response = await request(app)
+        .get(`/api/tasks/${fakeId}`)
+        .expect(404);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Task not found");
+    });
+
+    it("should return 400 for invalid ID format", async () => {
+      const response = await request(app)
+        .get("/api/tasks/invalid-id")
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Invalid parameters");
+    });
+  });
+});
+```
+
+## Adding Filter and Pagination in get all Tasks
+
+### Update (`src/schemas/taskSchemas.ts`)
+
+```ts
+// ...
+export const taskQuerySchema = z.object({
+  completed: z.enum(["true", "false"]).optional(),
+  priority: z.enum(["low", "medium", "high"]).optional(),
+  page: z.string().regex(/^\d+$/).optional(),
+  limit: z.string().regex(/^\d+$/).optional(),
+});
+
+// ...
+
+export type TaskQuery = z.infer<typeof taskQuerySchema>;
+```
+
+### Update (`src/middleware/validation.ts`)
+
+```ts
+export const validateQuery = (schema: ZodType): RequestHandler => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    try {
+      schema.parse(req.query);
+      next();
+    } catch (error) {
+      if (error instanceof ZodError) {
+        res.status(400).json({
+          success: false,
+          message: "Invalid query parameters",
+          errors: error.issues.map((err) => ({
+            field: err.path.join("."),
+            message: err.message,
+          })),
+        });
+        return;
+      }
+      next(error);
+    }
+  };
+};
+```
+
+### Update (`src/controllers/taskController.ts`)
+
+```ts
+import {
+  CreateTaskInput,
+  UpdateTaskInput,
+  TaskQuery,
+} from "../schemas/taskSchemas";
+
+// Update code of try block
+export const getTasks: RequestHandler = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const {
+      completed,
+      priority,
+      page = "1",
+      limit = "10",
+    } = req.query as TaskQuery;
+
+    const filter: any = {};
+
+    if (completed !== undefined) {
+      filter.completed = completed === "true";
+    }
+    if (priority) {
+      filter.priority = priority;
+    }
+
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    const tasks = await Task.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum);
+
+    const total = await Task.countDocuments(filter);
+
+    res.json({
+      success: true,
+      data: {
+        tasks,
+        pagination: {
+          current: pageNum,
+          total: Math.ceil(total / limitNum),
+          count: tasks.length,
+          totalItems: total,
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error fetching tasks",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+```
+
+### Update (`src/routes/taskRoutes.ts`)
+
+```ts
+import {
+  validateBody,
+  validateParams,
+  validateQuery,
+} from "../middleware/validation";
+import {
+  createTaskSchema,
+  updateTaskSchema,
+  taskParamsSchema,
+  taskQuerySchema,
+} from "../schemas/taskSchemas";
+
+/**
+ * @swagger
+ * /api/tasks:
+ *   get:
+ *     summary: Get all tasks
+ *     tags: [Tasks]
+ *     parameters:
+ *       - in: query
+ *         name: completed
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *         description: Filter by completion status
+ *       - in: query
+ *         name: priority
+ *         schema:
+ *           type: string
+ *           enum: [low, medium, high]
+ *         description: Filter by priority
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: string
+ *         description: Page number
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: string
+ *         description: Items per page
+ *     responses:
+ *       200:
+ *         description: List of tasks
+ */
+router.get("/", validateQuery(taskQuerySchema), getTasks);
+```
+
+### Update (`src/tests/tasks.test.ts`)
+
+```ts
+describe("Tasks API", () => {
+  // ....
+  // ....
+  // ....
+  describe("GET /api/tasks", () => {
+    // ....
+    // ....
+    // ....
+
+    it("should get all tasks", async () => {
+      const response = await request(app).get("/api/tasks").expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.tasks).toHaveLength(3);
+      expect(response.body.data.pagination.totalItems).toBe(3);
+    });
+
+    it("should filter tasks by completion status", async () => {
+      const response = await request(app)
+        .get("/api/tasks?completed=true")
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.tasks).toHaveLength(1);
+      expect(response.body.data.tasks[0].completed).toBe(true);
+    });
+
+    it("should filter tasks by priority", async () => {
+      const response = await request(app)
+        .get("/api/tasks?priority=high")
+        .expect(200);
+
+      expect(response.body.success).toBe(true);
+      expect(response.body.data.tasks).toHaveLength(1);
+      expect(response.body.data.tasks[0].priority).toBe("high");
+    });
+
+    it("should give query validation error", async () => {
+      const response = await request(app)
+        .get("/api/tasks?priority=higher&completed=done")
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Invalid query parameters");
+    });
+  });
 });
 ```

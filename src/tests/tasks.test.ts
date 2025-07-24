@@ -113,6 +113,15 @@ describe("Tasks API", () => {
       expect(response.body.data.tasks).toHaveLength(1);
       expect(response.body.data.tasks[0].priority).toBe("high");
     });
+
+    it("should give query validation error", async () => {
+      const response = await request(app)
+        .get("/api/tasks?priority=higher&completed=done")
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Invalid query parameters");
+    });
   });
 
   describe("GET /api/tasks/:id", () => {
@@ -152,6 +161,7 @@ describe("Tasks API", () => {
         .expect(400);
 
       expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Invalid parameters");
     });
   });
 
@@ -220,6 +230,28 @@ describe("Tasks API", () => {
 
       expect(response.body.success).toBe(false);
     });
+
+    it("should return validation error for invalid data", async () => {
+      const response = await request(app)
+        .put(`/api/tasks/${user1TaskId}`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .send({ title: "" })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Validation error");
+    });
+
+    it("should return validation error for invalid params", async () => {
+      const response = await request(app)
+        .put(`/api/tasks/invalid-id`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .send({ title: "Updated title" })
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Invalid parameters");
+    });
   });
 
   describe("DELETE /api/tasks/:id", () => {
@@ -284,6 +316,16 @@ describe("Tasks API", () => {
         .expect(404);
 
       expect(response.body.success).toBe(false);
+    });
+
+    it("should return validation error for invalid params", async () => {
+      const response = await request(app)
+        .delete(`/api/tasks/invalid-id`)
+        .set("Authorization", `Bearer ${authToken1}`)
+        .expect(400);
+
+      expect(response.body.success).toBe(false);
+      expect(response.body.message).toBe("Invalid parameters");
     });
   });
 });
